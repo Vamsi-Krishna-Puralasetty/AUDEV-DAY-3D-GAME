@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>3D Cube Jump Game</title>
+    <style>
+        body { margin: 0; }
+        canvas { display: block; }
+        
+        #scoreContainer {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            z-index: 100;
+            display: none;
+        }
+
+        #scoreboard {
+            background: rgba(0, 0, 0, 0.7);
+            padding: 15px 30px;
+            border-radius: 15px;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.3);
+            text-align: center;
+        }
+
+        #score {
+            color: #4CAF50;
+            font-family: 'Arial', sans-serif;
+            font-size: 48px;
+            font-weight: bold;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+            margin: 0;
+        }
+
+        #scoreLabel {
+            color: white;
+            font-family: 'Arial', sans-serif;
+            font-size: 18px;
+            margin-bottom: 5px;
+        }
+
+        #highScore {
+            color: #FFD700;
+            font-size: 20px;
+            margin-top: 5px;
+        }
+
+        .score-update {
+            animation: scorePopup 0.3s ease-out;
+        }
+
+        @keyframes scorePopup {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.2); }
+            100% { transform: scale(1); }
+        }
+
+        .floating-score {
+            position: fixed;
+            color: #4CAF50;
+            font-size: 24px;
+            font-weight: bold;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+            pointer-events: none;
+            animation: floatUp 1s ease-out;
+            opacity: 0;
+        }
+
+        @keyframes floatUp {
+            0% { transform: translateY(0); opacity: 1; }
+            100% { transform: translateY(-50px); opacity: 0; }
+        }
+    </style>
+</head>
+<body>
+    <div id="scoreContainer">
+        <div id="scoreboard">
+            <div id="scoreLabel">SCORE</div>
+            <div id="score">0</div>
+            <div id="highScore">HIGH SCORE: 0</div>
+        </div>
+    </div>
+    <div id="startMenu">
+        <div id="gameTitle">3D Cube Jump</div>
+        <button id="playButton">PLAY</button>
+    </div>
+    <div id="controls">
+        Camera Controls:<br>
+        Left Click + Drag - Rotate Camera<br>
+        Right Click + Drag - Pan Camera<br>
+        Mouse Wheel - Zoom
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        let scene, camera, renderer, player, platform, obstacle, backgroundBox;
+        let isJumping = false;
+        let gameOver = false;
+        let score = 0;
+        let highScore = localStorage.getItem('highScore') || 0;
+        let scoreElement;
+        let cameraOrbit = {
+            radius: 15,
+            theta: 0,    // horizontal angle
+            phi: Math.PI / 4    // vertical angle
+        };
+        let isDragging = false;
+        let isRightDragging = false;
+        let previousMousePosition = { x: 0, y: 0 };
+        let targetCameraPosition = new THREE.Vector3();
+        let cameraTarget = new THREE.Vector3(0, 0, 0);
+
+        // Add game state variable
+        let gameStarted = false;
+
+        let forestWalls;
+
+        function createForestEnvironment() {
+            const textureLoader = new THREE.TextureLoader();
+            const forestTexture = textureLoader.load('path_to_your_forest_image.jpg');
+            
+            // Create a large cylindrical environment
+            const geometry = new THREE.CylinderGeometry(30, 30, 40, 32, 1, true);
+            const material = new THREE.MeshPhongMaterial({
+                map: forestTexture,
+                side: THREE.BackSide,
+                shininess: 0
+            });
+            
+            forestWalls = new THREE.Mesh(geometry, material);
+            forestWalls.position.y = 10;
+            scene.add(forestWalls);
+
+            // Add ground with forest floor texture
+            const groundGeometry = new THREE.PlaneGeometry(60, 60);
+            const groundMaterial = new THREE.MeshPhongMaterial({
+                map: forestTexture,
+                shininess: 5
+            });
+            const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+            ground.rotation.x = -Math.PI / 2;
+            ground.position.y = -0.5;
+            ground.receiveShadow = true;
+            scene.add(ground);
+
+            // Add some 3D trees
+            addTrees();
+        }
+
+        function addTrees() {
+            const treePositions = [
+                [-15, 0, -10], [15, 0, -10],
+                [-12, 0, -15], [12, 0, -15],
+                [-8, 0, -12], [8, 0, -12],
+                [-18, 0, -8], [18, 0, -8]
+            ];
+
+            treePositions.forEach(pos => {
+                // Tree trunk
+                const trunkGeometry = new THREE.CylinderGeometry(0.5, 0.7, 5, 8);
+                const trunkMaterial = new THREE.MeshPhongMaterial({ color: 0x4a3219 });
+                const trunk = new THREE.Mesh(trunkGeometry, trunkMaterial);
+                trunk.position.set(pos[0], pos[1] + 2.5, pos[2]);
+                trunk.castShadow = true;
+                scene.add(trunk);
+
+                // Tree leaves
+                const leavesGeometry = new THREE.ConeGeometry(2, 4, 8);
+                const leavesMaterial = new THREE.MeshPhongMaterial({ color: 0x2d5a27 });
+                const leaves = new THREE.Mesh(leavesGeometry, leavesMaterial);
+                leaves.position.set(pos[0], pos[1] + 6, pos[2]);
+                leaves.castShadow = true;
+                scene.add(leaves);
+            });
+        }
+
+        function init() {
+            scene = new THREE.Scene();
+            
+            // Enhanced lighting for forest
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+
+            const sunLight = new THREE.DirectionalLight(0xffffff, 1);
+            sunLight.position.set(10, 20, 10);
+            sunLight.castShadow = true;
+            sunLight.shadow.mapSize.width = 2048;
+            sunLight.shadow.mapSize.height = 2048;
+            sunLight.shadow.camera.near = 0.5;
+            sunLight.shadow.camera.far = 50;
+            sunLight.shadow.camera.left = -20;
+            sunLight.shadow.camera.right = 20;
+            sunLight.shadow.camera.top = 20;
+            sunLight.shadow.camera.bottom = -20;
+            scene.add(sunLight);
+
+            // Add point lights for better atmosphere
+            const pointLight1 = new THREE.PointLight(0xffffff, 0.5);
+            pointLight1.position.set(-10, 5, -10);
+            scene.add(pointLight1);
+
+            const pointLight2 = new THREE.PointLight(0xffffff, 0.5);
+            pointLight2.position.set(10, 5, -10);
+            scene.add(pointLight2);
+
+            // Create 3D forest environment
+            createForestEnvironment();
+
+            // Update materials to match forest theme
+            const platformMaterial = new THREE.MeshPhongMaterial({ 
+                color: 0x8b4513, // Wood color for platform
+                shininess: 10,
+                specular: 0x222222
+            });
+
+            const playerMaterial = new THREE.MeshPhongMaterial({ 
+                color: 0x2ecc71,
+                shininess: 30,
+                specular: 0x444444
+            });
+
+            const obstacleMaterial = new THREE.MeshPhongMaterial({ 
+                color: 0xe74c3c,
+                shininess: 30,
+                specular: 0x444444
+            });
+
+            // Enhanced camera with better angle
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 5, 15);
+            camera.rotation.x = -0.2;
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            document.body.appendChild(renderer.domElement);
+
+            // Add background box
+            const boxGeometry = new THREE.BoxGeometry(50, 30, 30);
+            const boxMaterial = new THREE.MeshPhongMaterial({
+                color: 0x808080,
+                side: THREE.BackSide,
+                shininess: 50,
+                specular: 0x333333
+            });
+            backgroundBox = new THREE.Mesh(boxGeometry, boxMaterial);
+            backgroundBox.position.set(0, 10, 0);
+            backgroundBox.receiveShadow = true;
+            scene.add(backgroundBox);
+
+            // Create player with enhanced materials
+            const playerGeometry = new THREE.BoxGeometry(1, 1, 1);
+            player = new THREE.Mesh(playerGeometry, playerMaterial);
+            player.position.y = 1;
+            player.position.x = -8;
+            player.castShadow = true;
+            player.receiveShadow = true;
+            scene.add(player);
+
+            // Create platform with enhanced materials
+            const platformGeometry = new THREE.BoxGeometry(20, 0.5, 4);
+            platform = new THREE.Mesh(platformGeometry, platformMaterial);
+            platform.position.y = -0.25;
+            platform.receiveShadow = true;
+            scene.add(platform);
+
+            // Create obstacle with enhanced materials
+            const obstacleGeometry = new THREE.BoxGeometry(1, 1, 1);
+            obstacle = new THREE.Mesh(obstacleGeometry, obstacleMaterial);
+            obstacle.castShadow = true;
+            obstacle.receiveShadow = true;
+            resetObstacle();
+            scene.add(obstacle);
+
+            // Set initial camera position
+            updateCameraPosition();
+            camera.position.copy(targetCameraPosition);
+            camera.lookAt(cameraTarget);
+            
+            initCameraControls();
+
+            // Adjust camera for better forest view
+            camera.position.set(0, 5, 15);
+            camera.lookAt(0, 0, 0);
+
+            // Add subtle fog
+            scene.fog = new THREE.Fog(0xc8e6c9, 25, 50);
+        }
+
+        // Camera control functions
+        function initCameraControls() {
+            document.addEventListener('mousedown', onMouseDown);
+            document.addEventListener('mouseup', onMouseUp);
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('wheel', onMouseWheel);
+        }
+
+        function onMouseDown(event) {
+            if (event.button === 0) { // Left click
+                isDragging = true;
+            } else if (event.button === 2) { // Right click
+                isRightDragging = true;
+            }
+            previousMousePosition = {
+                x: event.clientX,
+                y: event.clientY
+            };
+        }
+
+        function onMouseUp(event) {
+            isDragging = false;
+            isRightDragging = false;
+        }
+
+        function onMouseMove(event) {
+            if (!isDragging && !isRightDragging) return;
+
+            const deltaMove = {
+                x: event.clientX - previousMousePosition.x,
+                y: event.clientY - previousMousePosition.y
+            };
+
+            if (isDragging) { // Orbit
+                cameraOrbit.theta -= deltaMove.x * 0.01;
+                cameraOrbit.phi = Math.max(0.1, Math.min(Math.PI / 2, cameraOrbit.phi - deltaMove.y * 0.01));
+                
+                updateCameraPosition();
+            } else if (isRightDragging) { // Pan
+                const pan = new THREE.Vector3();
+                pan.x = -deltaMove.x * 0.05;
+                pan.z = -deltaMove.y * 0.05;
+                pan.applyQuaternion(camera.quaternion);
+                cameraTarget.add(pan);
+                camera.position.add(pan);
+            }
+
+            previousMousePosition = {
+                x: event.clientX,
+                y: event.clientY
+            };
+        }
+
+        function onMouseWheel(event) {
+            const zoomSpeed = 0.1;
+            cameraOrbit.radius = Math.max(5, Math.min(30, cameraOrbit.radius + event.deltaY * zoomSpeed));
+            updateCameraPosition();
+        }
+
+        function updateCameraPosition() {
+            targetCameraPosition.x = cameraOrbit.radius * Math.sin(cameraOrbit.theta) * Math.cos(cameraOrbit.phi);
+            targetCameraPosition.y = cameraOrbit.radius * Math.sin(cameraOrbit.phi);
+            targetCameraPosition.z = cameraOrbit.radius * Math.cos(cameraOrbit.theta) * Math.cos(cameraOrbit.phi);
+            
+            targetCameraPosition.add(cameraTarget);
+        }
+
+        function smoothCameraUpdate() {
+            // Smooth camera movement
+            camera.position.lerp(targetCameraPosition, 0.1);
+            camera.lookAt(cameraTarget);
+        }
+
+        // Handle keyboard controls
+        document.addEventListener('keydown', (event) => {
+            if (!gameStarted || gameOver) return;
+            
+            switch(event.key) {
+                case 'ArrowLeft':
+                    player.position.x -= 0.5;
+                    break;
+                case 'ArrowRight':
+                    player.position.x += 0.5;
+                    break;
+                case ' ':
+                    if (!isJumping) jump();
+                    break;
+            }
+        });
+
+        // Jump function with improved mechanics
+        function jump() {
+            isJumping = true;
+            let jumpHeight = 0;
+            let jumpUp = true;
+            
+            function animateJump() {
+                if (jumpUp) {
+                    jumpHeight += 0.15;
+                    player.position.y += 0.15;
+                    if (jumpHeight >= 3.5) jumpUp = false;
+                } else {
+                    jumpHeight -= 0.1;
+                    player.position.y -= 0.1;
+                    if (jumpHeight <= 0) {
+                        isJumping = false;
+                        player.position.y = 1;
+                        return;
+                    }
+                }
+                if (isJumping) requestAnimationFrame(animateJump);
+            }
+            
+            animateJump();
+        }
+
+        // Reset obstacle position
+        function resetObstacle() {
+            obstacle.position.set(10, 1, 0);
+        }
+
+        // Check collision
+        function checkCollision() {
+            const playerBox = new THREE.Box3().setFromObject(player);
+            const obstacleBox = new THREE.Box3().setFromObject(obstacle);
+            return playerBox.intersectsBox(obstacleBox);
+        }
+
+        // Update score
+        function updateScore() {
+            score += 1;
+            document.getElementById('score').textContent = score;
+            document.getElementById('score').classList.add('score-update');
+            
+            // Update high score if needed
+            if (score > highScore) {
+                highScore = score;
+                localStorage.setItem('highScore', highScore);
+                document.getElementById('highScore').textContent = `HIGH SCORE: ${highScore}`;
+                document.getElementById('highScore').classList.add('score-update');
+            }
+
+            // Create floating score effect
+            createFloatingScore();
+
+            // Remove animation class
+            setTimeout(() => {
+                document.getElementById('score').classList.remove('score-update');
+                document.getElementById('highScore').classList.remove('score-update');
+            }, 300);
+        }
+
+        // Create floating score animation
+        function createFloatingScore() {
+            const floatingText = document.createElement('div');
+            floatingText.className = 'floating-score';
+            floatingText.textContent = '+10';
+            
+            // Position near the obstacle
+            const obstaclePosition = obstacle.position;
+            const vector = new THREE.Vector3();
+            vector.setFromMatrixPosition(obstacle.matrixWorld);
+            vector.project(camera);
+            
+            const x = (vector.x * 0.5 + 0.5) * window.innerWidth;
+            const y = (-vector.y * 0.5 + 0.5) * window.innerHeight;
+            
+            floatingText.style.left = `${x}px`;
+            floatingText.style.top = `${y}px`;
+            
+            document.body.appendChild(floatingText);
+            
+            // Remove element after animation
+            setTimeout(() => {
+                document.body.removeChild(floatingText);
+            }, 1000);
+        }
+
+        // Reset game
+        function resetGame() {
+            gameOver = false;
+            score = 0;
+            document.getElementById('score').textContent = score;
+            document.getElementById('highScore').textContent = `HIGH SCORE: ${highScore}`;
+            obstacleScored = false;
+            
+            if (character) {
+                character.position.set(-8, 0, 0);
+                character.rotation.y = 0;
+                if (animations.idle) {
+                    transitionTo(animations.idle);
+                }
+            }
+            
+            resetObstacle();
+            gameStarted = true;
+        }
+
+        // Updated animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            if (forestWalls) {
+                forestWalls.rotation.y += 0.0001; // Very slow rotation for subtle movement
+            }
+
+            smoothCameraUpdate();
+
+            if (gameStarted && !gameOver) {
+                obstacle.position.x -= 0.1;
+
+                if (obstacle.position.x < -10) {
+                    resetObstacle();
+                    updateScore();
+                }
+
+                if (checkCollision()) {
+                    gameOver = true;
+                    const playAgain = confirm(`Game Over! Your score: ${score}\nPlay again?`);
+                    if (playAgain) {
+                        resetGame();
+                    } else {
+                        gameStarted = false;
+                        document.getElementById('startMenu').style.display = 'block';
+                        document.getElementById('scoreContainer').style.display = 'none';
+                        document.getElementById('controls').style.display = 'none';
+                    }
+                }
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Add play button functionality
+        document.getElementById('playButton').addEventListener('click', startGame);
+
+        function startGame() {
+            gameStarted = true;
+            document.getElementById('startMenu').style.display = 'none';
+            document.getElementById('scoreContainer').style.display = 'block';
+            document.getElementById('controls').style.display = 'block';
+            document.getElementById('highScore').textContent = `HIGH SCORE: ${highScore}`;
+            resetGame();
+        }
+
+        // Initialize game elements but don't start gameplay
+        init();
+        animate();
+    </script>
+</body>
+</html> 
